@@ -13,7 +13,7 @@
       <svg class="top-nav__logo" viewBox="0 0 24 24" aria-hidden="true">
         <path d="M17.06 11.57c.24-1.6-.98-2.46-2.65-3.03l.54-2.17-1.32-.33-.53 2.11c-.35-.09-.7-.17-1.06-.25l.53-2.14-1.32-.33-.54 2.17c-.29-.07-.57-.13-.84-.2l.001-.006-1.82-.45-.35 1.41s.98.22.96.24c.54.13.63.49.62.77l-.62 2.48c.04.01.08.02.13.04l-.13-.03-.87 3.49c-.07.16-.23.41-.61.32.01.02-.96-.24-.96-.24l-.65 1.51 1.72.43c.32.08.63.17.94.25l-.55 2.2 1.32.33.54-2.17c.36.1.71.18 1.05.26l-.54 2.16 1.32.33.55-2.2c2.26.43 3.96.26 4.68-1.79.58-1.65-.03-2.6-1.22-3.22.87-.2 1.52-.77 1.7-1.95zm-3.04 4.25c-.41 1.65-3.18.76-4.08.53l.73-2.92c.9.23 3.79.67 3.35 2.39zm.41-4.28c-.37 1.5-2.68.74-3.43.55l.66-2.65c.75.19 3.16.54 2.77 2.1z"/>
       </svg>
-      <span id="blockHeightTooltip" class="top-nav__tooltip" role="tooltip" hidden></span>
+      <div id="blockHeightTooltip" class="top-nav__tooltip" role="tooltip" hidden></div>
     </div>
     <div class="top-nav__controls">
       <button
@@ -81,7 +81,10 @@
       <div class="balance-btc" id="balanceBtc">0.00000000 BTC</div>
       <div class="balance-unconfirmed" id="balanceUnconfirmed"></div>
       <div class="meta" id="meta">
-        <strong id="metaAddressLabel" data-i18n="address">Address:</strong> <span id="metaAddress"></span><br>
+        <div class="meta__address-row">
+          <strong id="metaAddressLabel" data-i18n="address">Address:</strong>
+          <span id="metaAddress" class="meta__address"></span>
+        </div>
         <strong data-i18n="addressType">Address Type:</strong> <span id="metaAddressType"></span><br>
         <strong data-i18n="exposedPubKey">Exposed PubKey:</strong> <span id="metaExposedPubKey"></span><br>
         <strong data-i18n="transactions">Transactions:</strong> <span id="metaTransactions"></span><br>

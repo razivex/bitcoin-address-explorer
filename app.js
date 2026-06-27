@@ -1,7 +1,27 @@
 const API_BASE = "https://mempool.space/api";
+const COINGECKO_BRL_PRICE_URL =
+  "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=brl";
+const COINGECKO_MAYER_CHART_URL =
+  "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=200&interval=daily";
+const COINMETRICS_MVRV_URL =
+  "https://community-api.coinmetrics.io/v4/timeseries/asset-metrics?assets=btc&metrics=CapMVRVCur&frequency=1d&page_size=1";
+const BITCOIN_DATA_API = "https://bitcoin-data.com/api/v1";
+const FEAR_GREED_API = "https://api.alternative.me/fng/?limit=1";
+const MARKET_METRICS_REFRESH_MS = 60 * 60 * 1000;
+const MARKET_METRICS_CACHE_KEY = "bitcoinExplorer.marketMetrics";
+const MAYER_CHEAP_MAX = 1;
+const MAYER_NEUTRAL_MAX = 2.4;
+const MVRV_CHEAP_MAX = 1;
+const MVRV_NEUTRAL_MAX = 3.7;
+const FEAR_GREED_NEUTRAL_MIN = 45;
+const FEAR_GREED_NEUTRAL_MAX = 55;
+const FEAR_GREED_CHEAP_LABELS = new Set(["Extreme Fear", "Fear"]);
+const FEAR_GREED_EXPENSIVE_LABELS = new Set(["Greed", "Extreme Greed"]);
 const SATS_PER_BTC = 100_000_000;
 const UPDATE_INTERVAL_MS = 10000;
 const BALANCE_SUB_FADE_MS = 600;
+const DIFFICULTY_ADJUSTMENT_INTERVAL = 2016;
+const HALVING_INTERVAL = 210_000;
 const addressInput = document.getElementById("address");
 const lookupBtn = document.getElementById("lookupBtn");
 const resultEl = document.getElementById("result");
@@ -46,6 +66,13 @@ let txWatchState = {
 let lastAppliedData = null;
 let cachedBlockHeight = null;
 let blockHeightInterval = null;
+let marketMetricsInterval = null;
+let cachedMarketMetrics = {
+  mayerMultiple: null,
+  mvrv: null,
+  fearGreed: null,
+  fearGreedLabel: null,
+};
 
 function showError(message) {
   errorEl.textContent = message;
@@ -389,16 +416,39 @@ function getFiatPrice() {
   return parseFiatPrice(cachedPrices);
 }
 
-async function fetchFiatPrice() {
+async function fetchBrlPrice() {
   try {
-    const prices = await fetchJson(`${API_BASE}/v1/prices`);
-    cachedPrices = prices;
-    const price = parseFiatPrice(prices);
-    if (price > 0) {
-      return price;
+    const data = await fetchJson(COINGECKO_BRL_PRICE_URL);
+    const brl = Number(data?.bitcoin?.brl);
+    if (Number.isFinite(brl) && brl > 0) {
+      cachedPrices.BRL = brl;
+      return brl;
     }
   } catch (err) {
     console.error(err);
+  }
+
+  return 0;
+}
+
+async function ensureBrlPriceCached() {
+  if (parseFiatPrice(cachedPrices, "BRL") > 0) {
+    return cachedPrices.BRL;
+  }
+
+  return fetchBrlPrice();
+}
+
+async function fetchFiatPrice() {
+  try {
+    const prices = await fetchJson(`${API_BASE}/v1/prices`);
+    cachedPrices = { ...cachedPrices, ...prices };
+  } catch (err) {
+    console.error(err);
+  }
+
+  if (getDisplayCurrency() === "BRL") {
+    await ensureBrlPriceCached();
   }
 
   return getFiatPrice();
@@ -658,7 +708,7 @@ function applyAddressData(data, { silent = false } = {}) {
 
   metaAddressLabelEl.textContent =
     data.lookupMode === "pubkey" ? t("publicKey") : t("address");
-  metaAddressEl.textContent = data.addressData.address;
+  setMetaAddressDisplay(data.addressData.address);
   metaAddressTypeEl.textContent = getAddressType(data.addressData.address, {
     isPublicKey: data.lookupMode === "pubkey",
   });
@@ -762,29 +812,345 @@ async function lookupAddress() {
   }
 }
 
+function truncateMiddle(text, visibleChars) {
+  if (text.length <= visibleChars) return text;
+
+  const ellipsis = "...";
+  const keep = visibleChars - ellipsis.length;
+  const start = Math.ceil(keep / 2);
+  const end = Math.floor(keep / 2);
+  return `${text.slice(0, start)}${ellipsis}${text.slice(-end)}`;
+}
+
+function fitMetaAddressToWidth() {
+  const fullAddress = metaAddressEl.dataset.fullAddress;
+  if (!fullAddress || !resultEl.classList.contains("show")) return;
+
+  metaAddressEl.textContent = fullAddress;
+
+  if (metaAddressEl.clientWidth === 0) return;
+
+  if (metaAddressEl.scrollWidth <= metaAddressEl.clientWidth) {
+    return;
+  }
+
+  for (let len = fullAddress.length - 1; len >= 12; len -= 1) {
+    metaAddressEl.textContent = truncateMiddle(fullAddress, len);
+    if (metaAddressEl.scrollWidth <= metaAddressEl.clientWidth) {
+      return;
+    }
+  }
+
+  metaAddressEl.textContent = truncateMiddle(fullAddress, 12);
+}
+
+function setMetaAddressDisplay(fullAddress) {
+  metaAddressEl.dataset.fullAddress = fullAddress;
+  metaAddressEl.title = fullAddress;
+  metaAddressEl.textContent = fullAddress;
+
+  requestAnimationFrame(() => {
+    fitMetaAddressToWidth();
+  });
+}
+
 function formatBlockHeight(height) {
   const value = Number(height);
   if (!Number.isFinite(value)) return height;
   return value.toLocaleString(getLocale());
 }
 
+function blocksUntilDifficultyAdjustment(blockHeight) {
+  const remainder = blockHeight % DIFFICULTY_ADJUSTMENT_INTERVAL;
+  return remainder === 0
+    ? DIFFICULTY_ADJUSTMENT_INTERVAL
+    : DIFFICULTY_ADJUSTMENT_INTERVAL - remainder;
+}
+
+function blocksUntilHalving(blockHeight) {
+  const nextHalving =
+    (Math.floor(blockHeight / HALVING_INTERVAL) + 1) * HALVING_INTERVAL;
+  return nextHalving - blockHeight;
+}
+
+function formatMetric(value, decimals = 2) {
+  if (value === null || value === undefined || value === "") return t("na");
+
+  const num = Number(value);
+  if (!Number.isFinite(num)) return t("na");
+
+  return num.toLocaleString(getLocale(), {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
+  });
+}
+
+function loadCachedMarketMetrics() {
+  try {
+    const raw = localStorage.getItem(MARKET_METRICS_CACHE_KEY);
+    if (!raw) return;
+
+    const parsed = JSON.parse(raw);
+    if (Date.now() - parsed.timestamp > MARKET_METRICS_REFRESH_MS) return;
+
+    cachedMarketMetrics = {
+      ...cachedMarketMetrics,
+      ...parsed.metrics,
+    };
+  } catch (err) {
+    console.error(err);
+  }
+}
+
+function saveCachedMarketMetrics() {
+  try {
+    localStorage.setItem(
+      MARKET_METRICS_CACHE_KEY,
+      JSON.stringify({
+        timestamp: Date.now(),
+        metrics: cachedMarketMetrics,
+      }),
+    );
+  } catch (err) {
+    console.error(err);
+  }
+}
+
+async function computeMayerMultipleFromCoinGecko() {
+  const data = await fetchJson(COINGECKO_MAYER_CHART_URL);
+  const prices = Array.isArray(data?.prices) ? data.prices : [];
+  const values = prices
+    .map((point) => Number(point?.[1]))
+    .filter((price) => Number.isFinite(price) && price > 0);
+
+  if (values.length === 0) return null;
+
+  const sma =
+    values.reduce((sum, price) => sum + price, 0) / values.length;
+  const current = values[values.length - 1];
+
+  if (!Number.isFinite(sma) || sma <= 0) return null;
+
+  return current / sma;
+}
+
+async function fetchMvrvFromCoinMetrics() {
+  const data = await fetchJson(COINMETRICS_MVRV_URL);
+  const latest = Array.isArray(data?.data) ? data.data[0] : null;
+  const value = Number(latest?.CapMVRVCur);
+
+  if (!Number.isFinite(value) || value <= 0) return null;
+
+  return value;
+}
+
+function formatTooltipBitcoinPrice() {
+  const price = getFiatPrice();
+  if (!price) return t("na");
+  return formatFiat(price);
+}
+
+function formatFearGreedValue() {
+  if (cachedMarketMetrics.fearGreed === null) return t("na");
+  return String(cachedMarketMetrics.fearGreed);
+}
+
+function getMayerMultipleTone(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return null;
+  if (num < MAYER_CHEAP_MAX) return "cheap";
+  if (num <= MAYER_NEUTRAL_MAX) return "neutral";
+  return "expensive";
+}
+
+function getMvrvTone(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return null;
+  if (num < MVRV_CHEAP_MAX) return "cheap";
+  if (num <= MVRV_NEUTRAL_MAX) return "neutral";
+  return "expensive";
+}
+
+function getFearGreedTone() {
+  const label = cachedMarketMetrics.fearGreedLabel;
+  if (FEAR_GREED_CHEAP_LABELS.has(label)) return "cheap";
+  if (label === "Neutral") return "neutral";
+  if (FEAR_GREED_EXPENSIVE_LABELS.has(label)) return "expensive";
+
+  const value = Number(cachedMarketMetrics.fearGreed);
+  if (!Number.isFinite(value)) return null;
+  if (value < FEAR_GREED_NEUTRAL_MIN) return "cheap";
+  if (value <= FEAR_GREED_NEUTRAL_MAX) return "neutral";
+  return "expensive";
+}
+
+function appendTooltipLine(parent, text) {
+  const line = document.createElement("span");
+  line.className = "top-nav__tooltip-line";
+  line.textContent = text;
+  parent.appendChild(line);
+}
+
+function appendTooltipMetricLine(parent, labelKey, valueText, tone) {
+  const line = document.createElement("span");
+  line.className = "top-nav__tooltip-line";
+
+  const label = t(labelKey, { value: "" });
+  line.appendChild(document.createTextNode(label));
+
+  const valueEl = document.createElement("span");
+  valueEl.className = "top-nav__tooltip-metric-value";
+  if (tone) {
+    valueEl.classList.add(`top-nav__tooltip-metric-value--${tone}`);
+  }
+  valueEl.textContent = valueText;
+  line.appendChild(valueEl);
+  parent.appendChild(line);
+}
+
 function updateBlockHeightTooltip() {
   if (!blockHeightTooltipEl || cachedBlockHeight === null) return;
 
-  blockHeightTooltipEl.textContent = t("blockHeight", {
-    height: formatBlockHeight(cachedBlockHeight),
-  });
+  const blockHeight = Number(cachedBlockHeight);
+  if (!Number.isFinite(blockHeight)) return;
+
+  blockHeightTooltipEl.replaceChildren();
+
+  appendTooltipLine(
+    blockHeightTooltipEl,
+    t("blockHeight", { height: formatBlockHeight(blockHeight) }),
+  );
+  appendTooltipLine(
+    blockHeightTooltipEl,
+    t("blocksToDifficulty", {
+      blocks: formatBlockHeight(blocksUntilDifficultyAdjustment(blockHeight)),
+    }),
+  );
+  appendTooltipLine(
+    blockHeightTooltipEl,
+    t("blocksToHalving", {
+      blocks: formatBlockHeight(blocksUntilHalving(blockHeight)),
+    }),
+  );
+  appendTooltipMetricLine(
+    blockHeightTooltipEl,
+    "mayerMultiple",
+    formatMetric(cachedMarketMetrics.mayerMultiple),
+    getMayerMultipleTone(cachedMarketMetrics.mayerMultiple),
+  );
+  appendTooltipMetricLine(
+    blockHeightTooltipEl,
+    "mvrvRatio",
+    formatMetric(cachedMarketMetrics.mvrv),
+    getMvrvTone(cachedMarketMetrics.mvrv),
+  );
+  appendTooltipMetricLine(
+    blockHeightTooltipEl,
+    "fearGreedIndex",
+    formatFearGreedValue(),
+    getFearGreedTone(),
+  );
+  appendTooltipLine(
+    blockHeightTooltipEl,
+    t("bitcoinPrice", { value: formatTooltipBitcoinPrice() }),
+  );
+
   blockHeightTooltipEl.hidden = false;
+}
+
+async function fetchMayerMultiple() {
+  try {
+    const data = await fetchJson(`${BITCOIN_DATA_API}/mayer-multiple/latest`);
+    const value = Number(data?.mayerMultiple);
+    if (Number.isFinite(value) && value > 0) {
+      cachedMarketMetrics.mayerMultiple = value;
+      return;
+    }
+  } catch (err) {
+    console.error(err);
+  }
+
+  try {
+    const value = await computeMayerMultipleFromCoinGecko();
+    if (Number.isFinite(value) && value > 0) {
+      cachedMarketMetrics.mayerMultiple = value;
+    }
+  } catch (err) {
+    console.error(err);
+  }
+}
+
+async function fetchMvrvRatio() {
+  try {
+    const data = await fetchJson(`${BITCOIN_DATA_API}/mvrv/latest`);
+    const value = Number(data?.mvrv);
+    if (Number.isFinite(value) && value > 0) {
+      cachedMarketMetrics.mvrv = value;
+      return;
+    }
+  } catch (err) {
+    console.error(err);
+  }
+
+  try {
+    const value = await fetchMvrvFromCoinMetrics();
+    if (Number.isFinite(value) && value > 0) {
+      cachedMarketMetrics.mvrv = value;
+    }
+  } catch (err) {
+    console.error(err);
+  }
+}
+
+async function fetchFearGreedIndex() {
+  try {
+    const data = await fetchJson(FEAR_GREED_API);
+    const latest = Array.isArray(data?.data) ? data.data[0] : null;
+    const value = Number(latest?.value);
+    if (Number.isFinite(value)) {
+      cachedMarketMetrics.fearGreed = value;
+      cachedMarketMetrics.fearGreedLabel = latest?.value_classification ?? null;
+    }
+  } catch (err) {
+    console.error(err);
+  }
+}
+
+async function fetchMarketMetrics() {
+  await Promise.all([
+    fetchMayerMultiple(),
+    fetchMvrvRatio(),
+    fetchFearGreedIndex(),
+  ]);
+  saveCachedMarketMetrics();
+  updateBlockHeightTooltip();
+}
+
+function startMarketMetricsRefresh() {
+  fetchMarketMetrics();
+
+  if (marketMetricsInterval !== null) {
+    clearInterval(marketMetricsInterval);
+  }
+
+  marketMetricsInterval = setInterval(
+    fetchMarketMetrics,
+    MARKET_METRICS_REFRESH_MS,
+  );
 }
 
 async function fetchBlockHeight() {
   try {
-    const response = await fetch(`${API_BASE}/blocks/tip/height`);
-    if (!response.ok) {
-      throw new Error(`API error (${response.status})`);
+    const [heightResponse] = await Promise.all([
+      fetch(`${API_BASE}/blocks/tip/height`),
+      fetchFiatPrice(),
+    ]);
+
+    if (!heightResponse.ok) {
+      throw new Error(`API error (${heightResponse.status})`);
     }
 
-    const height = (await response.text()).trim();
+    const height = (await heightResponse.text()).trim();
     if (!/^\d+$/.test(height)) {
       throw new Error("Invalid block height response");
     }
@@ -806,7 +1172,9 @@ function startBlockHeightRefresh() {
   blockHeightInterval = setInterval(fetchBlockHeight, UPDATE_INTERVAL_MS);
 }
 
+loadCachedMarketMetrics();
 startBlockHeightRefresh();
+startMarketMetricsRefresh();
 
 lookupBtn.addEventListener("click", lookupAddress);
 qrBtn.addEventListener("click", showQrCode);
@@ -819,14 +1187,26 @@ addressInput.addEventListener("keydown", (event) => {
   if (event.key === "Enter") lookupAddress();
 });
 
+window.addEventListener("resize", () => {
+  fitMetaAddressToWidth();
+});
+
 onLanguageChange(() => {
   if (lookupBtn.disabled) {
     lookupBtn.textContent = t("loading");
   }
 
-  updateBlockHeightTooltip();
+  const refreshAfterLanguageChange = async () => {
+    if (getDisplayCurrency() === "BRL") {
+      await ensureBrlPriceCached();
+    }
 
-  if (lastAppliedData && resultEl.classList.contains("show")) {
-    applyAddressData(lastAppliedData, { silent: true });
-  }
+    updateBlockHeightTooltip();
+
+    if (lastAppliedData && resultEl.classList.contains("show")) {
+      applyAddressData(lastAppliedData, { silent: true });
+    }
+  };
+
+  void refreshAfterLanguageChange();
 });

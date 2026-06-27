@@ -37,11 +37,35 @@ The top bar runs across the full width of the page and includes:
 
 | Control | Location | Purpose |
 |---|---|---|
-| **Bitcoin logo** | Left | Hover to see the current chain tip block height (preloaded on page load) |
+| **Bitcoin logo** | Left | Hover to see live chain and market stats (preloaded on page load) |
 | **Sound toggle** | Right | Mute or unmute transaction alert sounds |
 | **Language picker** | Right | Switch between English (US flag) and Portuguese (Brazil flag) |
 
 Language and sound preferences are saved in `localStorage`.
+
+### Bitcoin logo tooltip
+
+Hover the Bitcoin logo in the navigation bar to see live on-chain and market data:
+
+| Line | Updates | Description |
+|---|---|---|
+| **Height** | Every 10 s | Current chain tip block height |
+| **Difficult Adjustment** | Every 10 s | Blocks remaining until the next difficulty retarget |
+| **Halving** | Every 10 s | Blocks remaining until the next halving |
+| **Mayer Multiple** | Every 1 h | BTC price divided by the 200-day moving average |
+| **MVRV Ratio** | Every 1 h | Market value to realized value ratio |
+| **Fear & Greed** | Every 1 h | Crypto Fear & Greed Index (0–100) |
+| **Price** | Every 10 s | Current BTC spot price in USD or BRL |
+
+Mayer Multiple, MVRV, and Fear & Greed values are **color-coded**:
+
+| Color | Meaning |
+|---|---|
+| **Green** | Cheap / undervalued (Mayer &lt; 1, MVRV &lt; 1, Fear) |
+| **Yellow** | Neutral (Mayer 1–2.4, MVRV 1–3.7, Neutral) |
+| **Red** | Expensive / overvalued (Mayer &gt; 2.4, MVRV &gt; 3.7, Greed) |
+
+Market metrics are cached in `localStorage` for one hour so they survive page reloads and API rate limits.
 
 ### Supported inputs
 
@@ -65,12 +89,12 @@ The application is a static single-page interface made of plain HTML, CSS, and J
 │  styles.css │                     │  (orchestration) │
 └─────────────┘                     └────────┬─────────┘
                                              │
-              ┌──────────────────────────────┼──────────────────────────────┐
-              ▼              ▼               ▼               ▼              ▼
-      ┌──────────────┐ ┌──────────┐  ┌──────────────┐ ┌──────────┐  ┌──────────────┐
-      │pubkey-utils  │ │  i18n.js │  │ mempool.space│ │sounds.js │  │ qrcode (CDN) │
-      │.js           │ │          │  │ REST API     │ │          │  │ QR rendering │
-      └──────────────┘ └──────────┘  └──────────────┘ └──────────┘  └──────────────┘
+              ┌──────────────────────────────┼──────────────────────────────────────┐
+              ▼              ▼               ▼               ▼              ▼         ▼
+      ┌──────────────┐ ┌──────────┐  ┌──────────────┐ ┌──────────┐  ┌──────────┐ ┌────────────┐
+      │pubkey-utils  │ │  i18n.js │  │ mempool.space│ │sounds.js │  │ qrcode   │ │ CoinGecko, │
+      │.js           │ │          │  │ REST API     │ │          │  │ (CDN)    │ │ CoinMetrics│
+      └──────────────┘ └──────────┘  └──────────────┘ └──────────┘  └──────────┘ └────────────┘
 ```
 
 ### Lookup flow
@@ -110,12 +134,12 @@ This is the **net** of all pending transactions combined — not just the last o
 | +0.2 BTC in, −0.1 BTC out | `0.10000000 BTC` |
 | +0.1 BTC in, −0.1 BTC out | `0.00000000 BTC` (line still shown when both directions are active) |
 
-The fiat line is based on the **confirmed** balance using the live price from `GET /api/v1/prices`:
+The fiat line is based on the **confirmed** balance using the live BTC spot price:
 
-- **English** → USD
-- **Portuguese** → BRL
+- **English** → USD (from mempool.space `GET /api/v1/prices`)
+- **Portuguese** → BRL (from [CoinGecko](https://api.coingecko.com), since mempool.space does not provide BRL)
 
-If the price request fails, the last successful cached price is reused.
+Prices are merged into a local cache so BRL persists across the 10-second refresh cycle. If a price request fails, the last successful cached value is reused.
 
 ### Unconfirmed direction arrows
 
@@ -157,7 +181,8 @@ Timers keep the UI fresh after a successful lookup:
 | Timer | Interval | Purpose |
 |---|---|---|
 | Auto-refresh | 10 s | Silently re-fetches all on-chain data from mempool.space |
-| Block height | 10 s | Updates the cached chain tip shown on logo hover |
+| Block height & price | 10 s | Updates chain tip, difficulty/halving countdown, and BTC spot price in the logo tooltip |
+| Market metrics | 1 h | Refreshes Mayer Multiple, MVRV Ratio, and Fear & Greed Index |
 | Time since last transaction | 1 s | Updates the human-readable elapsed time counter |
 | Fiat / unconfirmed cycle | 10 s | When mempool activity exists, alternates the subtitle between fiat value and unconfirmed BTC (with a fade transition) |
 
@@ -246,7 +271,7 @@ This app follows mempool.space and queries the **P2PK scripthash** when you past
 
 | Field | Description |
 |---|---|
-| **Address / Public Key** | The value that was looked up |
+| **Address / Public Key** | The value that was looked up (truncated with `...` to fit one line; hover for the full value) |
 | **Address Type** | `P2PK`, `P2PKH`, `P2SH`, `P2WPKH`, `P2WSH`, or `P2TR` |
 | **Exposed PubKey** | `Yes` if the public key is visible on-chain, `No` otherwise |
 | **Transactions** | Total number of confirmed transactions |
@@ -270,9 +295,23 @@ This app follows mempool.space and queries the **P2PK scripthash** when you past
 | Dependency | Loaded from | Used for |
 |---|---|---|
 | [qrcode](https://www.npmjs.com/package/qrcode) | jsDelivr CDN | QR code generation |
-| [mempool.space API](https://mempool.space/docs/api/rest) | `mempool.space` | On-chain data, block height, and BTC prices |
+| [mempool.space API](https://mempool.space/docs/api/rest) | `mempool.space` | On-chain data, block height, and USD prices |
+| [CoinGecko API](https://www.coingecko.com/en/api) | `api.coingecko.com` | BRL spot price and Mayer Multiple fallback (200-day SMA) |
+| [CoinMetrics Community API](https://community-api.coinmetrics.io/) | `community-api.coinmetrics.io` | MVRV Ratio fallback (`CapMVRVCur`) |
+| [bitcoin-data.com API](https://bitcoin-data.com/) | `bitcoin-data.com` | Primary Mayer Multiple and MVRV data (rate-limited) |
+| [Alternative.me Fear & Greed API](https://alternative.me/crypto/fear-and-greed-index/) | `api.alternative.me` | Crypto Fear & Greed Index |
 | Web Crypto API | Browser built-in | SHA-256 for scripthash calculation |
 | Web Audio API | Browser built-in | Transaction alert sounds |
+
+### Market metrics fallbacks
+
+Mayer Multiple and MVRV are fetched from bitcoin-data.com first. If that API is unavailable (rate limit or network error), the app falls back automatically:
+
+| Metric | Primary source | Fallback |
+|---|---|---|
+| Mayer Multiple | bitcoin-data.com | Computed locally from CoinGecko 200-day price history |
+| MVRV Ratio | bitcoin-data.com | CoinMetrics `CapMVRVCur` |
+| Fear & Greed | Alternative.me | — |
 
 ## Author
 

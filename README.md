@@ -2,8 +2,6 @@
 
 A lightweight, client-side web app to look up Bitcoin balances and activity directly from the timechain. No backend, no accounts, and no build step — open `index.html` in a browser or serve the folder locally.
 
-Data is fetched live from the [mempool.space](https://mempool.space) public API.
-
 ## What it is used for
 
 - **Search addresses, public keys, and transactions** in one field — the app auto-detects the input type

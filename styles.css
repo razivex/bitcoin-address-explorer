@@ -425,6 +425,10 @@ button:disabled {
 
 .result.show { display: block; }
 
+.tx-result {
+  padding: 18px;
+}
+
 .qr-btn {
   position: absolute;
   top: 12px;
@@ -533,6 +537,29 @@ button:disabled {
 
 .balance-unconfirmed.is-fading {
   opacity: 0;
+}
+
+@keyframes tx-status-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.3;
+  }
+}
+
+.tx-status-sub--unconfirmed {
+  color: #f5c542;
+  animation: tx-status-blink 2.8s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tx-status-sub--unconfirmed {
+    animation: none;
+    opacity: 1;
+  }
 }
 
 .meta {

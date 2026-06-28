@@ -56,15 +56,15 @@
 
   <main class="card">
     <h1 data-i18n="pageHeading">Bitcoin Explorer</h1>
-    <p class="sub" data-i18n="pageSub">Real time check any bitcoin address or pubkey, including balance, transactions, and other important datas</p>
+    <p class="sub" data-i18n="pageSub">Real time check any bitcoin address, pubkey, or transaction, including balance, status, and other important data</p>
 
-    <label for="address" data-i18n="addressLabel">Bitcoin address or public key</label>
+    <label for="address" data-i18n="searchLabel">Bitcoin address, public key, or transaction</label>
     <div class="row">
       <input
         id="address"
         type="text"
-        data-i18n-placeholder="addressPlaceholder"
-        placeholder="e.g. bc1q..., 1A1zP1..., or public key hex"
+        data-i18n-placeholder="searchPlaceholder"
+        placeholder="e.g. bc1q..., 1A1zP1..., public key hex, or txid"
         spellcheck="false"
         autocomplete="off"
       />
@@ -72,6 +72,24 @@
     </div>
 
     <div id="error" class="error"></div>
+
+    <section id="txResult" class="result tx-result" aria-live="polite">
+      <div class="balance-btc" id="txValueBtc">0.00000000 BTC</div>
+      <div class="balance-unconfirmed" id="txStatusSub"></div>
+      <div class="meta" id="txMeta">
+        <div class="meta__address-row">
+          <strong data-i18n="txId">Transaction ID:</strong>
+          <span id="txMetaId" class="meta__address"></span>
+        </div>
+        <strong data-i18n="txDate">First Seen Date:</strong> <span id="txMetaDate">N/A</span><br>
+        <strong data-i18n="txFee">Fee:</strong> <span id="txMetaFee">N/A</span><br>
+        <strong data-i18n="txEmbeddedData">Embedded data:</strong> <span id="txEmbeddedData">N/A</span><br>
+        <strong data-i18n="txConfirmations">Confirmations:</strong> <span id="txMetaConfirmations">N/A</span><br>
+        <strong data-i18n="txConfirmedAt">Confirmed Date:</strong> <span id="txMetaConfirmedAt">N/A</span><br>
+        <strong data-i18n="txTimeToConfirmation">Time to confirmation:</strong> <span id="txMetaTimeToConfirmation">N/A</span><br>
+        <strong data-i18n="txTimeSinceConfirmation">Time since confirmation:</strong> <span id="txMetaTimeSinceConfirmation">N/A</span><br>
+      </div>
+    </section>
 
     <section id="result" class="result" aria-live="polite">
       <button id="qrBtn" class="qr-btn" type="button" data-i18n="qrShow" data-i18n-attr="aria-label" aria-label="Show address QR code" data-i18n-title="qrTitle" title="QR code">
@@ -121,6 +139,7 @@
 
   <script src="https://cdn.jsdelivr.net/npm/qrcode/build/qrcode.min.js"></script>
   <script src="pubkey-utils.js"></script>
+  <script src="tx-utils.js"></script>
   <script src="i18n.js"></script>
   <script src="sounds.js"></script>
   <script src="blocks-fx.js"></script>

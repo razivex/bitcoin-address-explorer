@@ -6,13 +6,15 @@ Data is fetched live from the [mempool.space](https://mempool.space) public API.
 
 ## What it is used for
 
+- **Search addresses, public keys, and transactions** in one field — the app auto-detects the input type (like mempool.space)
 - **Check confirmed BTC balance** for any address or public key (unconfirmed shown separately)
 - **See the fiat value** of the confirmed balance in real time (USD or BRL)
 - **Inspect on-chain activity** — script type, exposed pubkey status, transaction count, and last transaction details
 - **Track how long ago** the last confirmed transaction occurred
 - **Monitor mempool activity** — directional arrows show pending incoming and outgoing funds
 - **Watch the global mempool** — animated blocks fall behind the card as new transactions enter the mempool, color-coded by fee rate
-- **Get audio alerts** when new unconfirmed or confirmed transactions are detected
+- **Look up any transaction** by txid — output value, fee, confirmations, first-seen date, confirmation timing, and embedded data (OP_RETURN, inscriptions, runes, etc.)
+- **Get audio alerts** when new unconfirmed or confirmed transactions are detected (including when a watched transaction confirms)
 - **Share or receive payments** via a scannable QR code
 - **Monitor live** — data refreshes automatically every 10 seconds
 - **Switch language** between English and Brazilian Portuguese
@@ -29,8 +31,10 @@ python -m http.server 8080
 
 Then visit `http://localhost:8080`.
 
-2. Paste a **Bitcoin address** or **public key in hex**.
+2. Paste a **Bitcoin address**, **public key in hex**, or **transaction ID** (64-character hex).
 3. Click **Check**.
+
+The same search box handles all input types. A 64-character hex string is treated as a txid; everything else is resolved as an address or public key.
 
 ### Navigation bar
 
@@ -97,6 +101,28 @@ While an address or public key lookup is active, the app also subscribes to that
 | Taproot P2TR | starts with `bc1p` | `bc1p...` |
 | Compressed public key | 66 hex chars, `02` or `03` prefix | `02...` / `03...` |
 | Uncompressed public key | 130 hex chars, `04` prefix | `04...` |
+| Transaction ID | 64 hex chars | `f4184fc596403b9d638783cf57adfe4c75c605f6356fbc9133855e5811f2e4fe6` |
+
+### Transaction lookup
+
+When a txid is detected, the result panel shows:
+
+| Field | Description |
+|---|---|
+| **Output value** | Total BTC in transaction outputs (large display) |
+| **Status** | Confirmed or Unconfirmed — unconfirmed status blinks slowly in yellow |
+| **Transaction ID** | Full txid (truncated to fit one line; hover for the full value) |
+| **First Seen Date** | When the transaction first entered the mempool |
+| **Fee** | `rate sat/vB × vsize vB = fee sats` on one line |
+| **Embedded data** | `Yes` or `No` — detects OP_RETURN, inscriptions, runes, BRC-20, images, and plain text |
+| **Confirmations** | `0` while unconfirmed; `chain tip − block height + 1` after confirmation |
+| **Confirmed Date** | Block time when confirmed (`N/A` while pending) |
+| **Time to confirmation** | Elapsed time from first seen to confirmation (`N/A` while pending) |
+| **Time since confirmation** | Live counter from confirmation time (`N/A` while pending) |
+
+First-seen time for confirmed transactions comes from `GET /api/v1/transaction-times` while still in the mempool, with a fallback to `GET /api/v1/block/{hash}/tx/{txid}/summary` after confirmation.
+
+Transaction data refreshes every **10 seconds**. A mechanical click sound plays when a watched transaction moves from unconfirmed to confirmed (respects the mute toggle).
 
 ## How the app works
 
@@ -108,17 +134,23 @@ The application is a static single-page interface made of plain HTML, CSS, and J
 │  styles.css │                     │  (orchestration) │
 └─────────────┘                     └────────┬─────────┘
                                              │
-              ┌──────────────────────────────┼──────────────────────────────────────────────┐
-              ▼              ▼               ▼               ▼              ▼         ▼       ▼
-      ┌──────────────┐ ┌──────────┐  ┌──────────────┐ ┌──────────┐  ┌──────────┐ ┌──────────┐ ┌────────────┐
-      │pubkey-utils  │ │  i18n.js │  │ mempool.space│ │sounds.js │  │blocks-fx │ │ qrcode   │ │ CoinGecko, │
-      │.js           │ │          │  │ REST + WS    │ │          │  │.js       │ │ (CDN)    │ │ CoinMetrics│
-      └──────────────┘ └──────────┘  └──────────────┘ └──────────┘  └──────────┘ └──────────┘ └────────────┘
+              ┌──────────────────────────────┼──────────────────────────────────────────────────────┐
+              ▼              ▼               ▼               ▼              ▼         ▼       ▼      ▼
+      ┌──────────────┐ ┌──────────┐  ┌──────────────┐ ┌──────────┐  ┌──────────┐ ┌────────┐ ┌──────────┐ ┌────────────┐
+      │pubkey-utils  │ │tx-utils  │  │ mempool.space│ │sounds.js │  │blocks-fx │ │ qrcode │ │ CoinGecko│ │ CoinMetrics│
+      │.js           │ │.js       │  │ REST + WS    │ │          │  │.js       │ │ (CDN)  │ │          │ │            │
+      └──────────────┘ └──────────┘  └──────────────┘ └──────────┘  └──────────┘ └────────┘ └──────────┘ └────────────┘
+                                              ▲
+                                         ┌──────────┐
+                                         │  i18n.js │
+                                         └──────────┘
 ```
 
 ### Lookup flow
 
-When the user clicks **Check**, `app.js` runs this pipeline:
+When the user clicks **Check**, `app.js` classifies the input and routes to the correct flow:
+
+**Address / public key**
 
 1. **Classify the input** — `pubkey-utils.js` decides whether the string is a standard address or a hex-encoded secp256k1 public key.
 2. **Resolve the API target** — depending on the input type, the app queries a different mempool.space endpoint (see [Public keys vs addresses](#public-keys-vs-addresses) below).
@@ -128,6 +160,13 @@ When the user clicks **Check**, `app.js` runs this pipeline:
    - BTC spot prices (`/v1/prices`)
 4. **Compute derived values** — confirmed BTC balance, fiat estimate, script type, exposed pubkey status, last transaction date, and formatted timestamps.
 5. **Render the result panel** and start live timers.
+
+**Transaction ID**
+
+1. **Detect txid** — `tx-utils.js` matches 64-character hex strings.
+2. **Fetch transaction** — `GET /api/tx/{txid}` plus first-seen time from `GET /api/v1/transaction-times` (with block-summary fallback for confirmed txs).
+3. **Analyze outputs** — fee rate, virtual size, embedded-data detection, and confirmation count vs chain tip.
+4. **Render the transaction panel** and start live timers (confirmation elapsed time, confirmation count).
 
 ### Balance calculation
 
@@ -179,7 +218,8 @@ After the first successful lookup, auto-refresh can trigger audio alerts (requir
 | Event | Sound |
 |---|---|
 | New unconfirmed transaction | Bell |
-| New confirmed transaction | Mechanical "done" click |
+| New confirmed transaction (address lookup) | Mechanical "done" click |
+| Watched transaction confirms (tx lookup) | Mechanical "done" click |
 
 Use the bell button in the navigation bar to mute or unmute sounds. The preference is saved in `localStorage`.
 
@@ -199,10 +239,12 @@ Timers keep the UI fresh after a successful lookup:
 
 | Timer | Interval | Purpose |
 |---|---|---|
-| Auto-refresh | 10 s | Silently re-fetches all on-chain data from mempool.space |
+| Auto-refresh | 10 s | Silently re-fetches address or transaction data from mempool.space |
 | Block height & price | 10 s | Updates chain tip, difficulty/halving countdown, supply, hashrate, network difficulty, and BTC spot price in the logo tooltip |
 | Market metrics | 1 h | Refreshes Mayer Multiple, MVRV Ratio, and Fear & Greed Index |
-| Time since last transaction | 1 s | Updates the human-readable elapsed time counter |
+| Time since last transaction | 1 s | Updates the human-readable elapsed time counter (address lookup) |
+| Time since confirmation | 1 s | Updates the elapsed time since a transaction was confirmed |
+| Confirmations | 10 s | Updates confirmation count as new blocks are mined |
 | Fiat / unconfirmed cycle | 10 s | When mempool activity exists, alternates the subtitle between fiat value and unconfirmed BTC (with a fade transition) |
 
 Auto-refresh uses a generation counter so stale responses from earlier lookups are ignored if the user submits a new input before the request finishes.
@@ -279,7 +321,11 @@ This app follows mempool.space and queries the **P2PK scripthash** when you past
 
 ## Data shown for each lookup
 
-### Balance
+### Transaction
+
+See [Transaction lookup](#transaction-lookup) above for the full field list.
+
+### Balance (address / public key)
 
 | Field | Description |
 |---|---|
@@ -301,10 +347,11 @@ This app follows mempool.space and queries the **P2PK scripthash** when you past
 
 | File | Purpose |
 |---|---|
-| `index.html` | Page structure, navigation bar, input form, result panel, QR overlay |
-| `styles.css` | Dark-themed styling |
-| `app.js` | API calls, balance logic, live timers, sounds triggers, UI updates |
+| `index.html` | Page structure, navigation bar, unified search form, address/transaction result panels, QR overlay |
+| `styles.css` | Dark-themed styling, unconfirmed status blink animation |
+| `app.js` | API calls, address/transaction routing, balance logic, live timers, sound triggers, UI updates |
 | `pubkey-utils.js` | Public key detection, P2PK script construction, scripthash calculation |
+| `tx-utils.js` | Txid validation, embedded-data detection (OP_RETURN, inscriptions, runes, BRC-20, images) |
 | `i18n.js` | English / Brazilian Portuguese translations and language picker |
 | `sounds.js` | Web Audio transaction alert sounds and mute toggle |
 | `blocks-fx.js` | Mempool WebSocket, falling-block animation, fee-based and address-specific block colors |

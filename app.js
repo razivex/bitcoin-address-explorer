@@ -1,4 +1,5 @@
 const API_BASE = "https://mempool.space/api";
+const TRANSACTION_TIMES_URL = "https://mempool.space/api/v1/transaction-times";
 const COINGECKO_BRL_PRICE_URL =
   "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=brl";
 const COINGECKO_MAYER_CHART_URL =
@@ -27,6 +28,20 @@ const BALANCE_BTC_MIN_FONT_PX = 11;
 const addressInput = document.getElementById("address");
 const lookupBtn = document.getElementById("lookupBtn");
 const resultEl = document.getElementById("result");
+const txResultEl = document.getElementById("txResult");
+const txValueBtcEl = document.getElementById("txValueBtc");
+const txStatusSubEl = document.getElementById("txStatusSub");
+const txMetaIdEl = document.getElementById("txMetaId");
+const txMetaDateEl = document.getElementById("txMetaDate");
+const txMetaConfirmedAtEl = document.getElementById("txMetaConfirmedAt");
+const txMetaTimeToConfirmationEl = document.getElementById("txMetaTimeToConfirmation");
+const txMetaTimeSinceConfirmationEl = document.getElementById(
+  "txMetaTimeSinceConfirmation",
+);
+const txMetaFeeEl = document.getElementById("txMetaFee");
+
+const txEmbeddedDataEl = document.getElementById("txEmbeddedData");
+const txMetaConfirmationsEl = document.getElementById("txMetaConfirmations");
 const errorEl = document.getElementById("error");
 const balanceBtcEl = document.getElementById("balanceBtc");
 const balanceUnconfirmedEl = document.getElementById("balanceUnconfirmed");
@@ -44,11 +59,16 @@ const timeSinceLastEl = document.getElementById("timeSinceLast");
 const blockHeightTooltipEl = document.getElementById("blockHeightTooltip");
 
 let timeSinceLastInterval = null;
+let txTimeSinceConfirmationInterval = null;
+let txAutoRefreshInterval = null;
 let balanceSubInterval = null;
 let autoRefreshInterval = null;
 let refreshInFlight = false;
 let lookupGeneration = 0;
+let txLookupGeneration = 0;
 let currentLookupInput = null;
+let currentTxLookup = null;
+let lastAppliedTxData = null;
 let lastTxTimestamp = null;
 let cachedPrices = {};
 let balanceSubState = {
@@ -64,6 +84,10 @@ let txWatchState = {
   chainTxCount: 0,
   mempoolTxCount: 0,
   lastConfirmedTxId: null,
+};
+let txConfirmationWatchState = {
+  initialized: false,
+  confirmed: false,
 };
 let lastAppliedData = null;
 let cachedBlockHeight = null;
@@ -84,6 +108,7 @@ function showError(message) {
   errorEl.textContent = message;
   errorEl.classList.add("show");
   resultEl.classList.remove("show");
+  txResultEl.classList.remove("show");
 }
 
 function clearError() {
@@ -95,6 +120,20 @@ function stopTimeSinceTimer() {
   if (timeSinceLastInterval !== null) {
     clearInterval(timeSinceLastInterval);
     timeSinceLastInterval = null;
+  }
+}
+
+function stopTxTimeSinceConfirmationTimer() {
+  if (txTimeSinceConfirmationInterval !== null) {
+    clearInterval(txTimeSinceConfirmationInterval);
+    txTimeSinceConfirmationInterval = null;
+  }
+}
+
+function stopTxAutoRefresh() {
+  if (txAutoRefreshInterval !== null) {
+    clearInterval(txAutoRefreshInterval);
+    txAutoRefreshInterval = null;
   }
 }
 
@@ -118,6 +157,34 @@ function resetTxWatchState() {
     chainTxCount: 0,
     mempoolTxCount: 0,
     lastConfirmedTxId: null,
+  };
+}
+
+function resetTxConfirmationWatchState() {
+  txConfirmationWatchState = {
+    initialized: false,
+    confirmed: false,
+  };
+}
+
+function detectAndPlayTxConfirmationSound(data, { silent = false } = {}) {
+  const confirmed = Boolean(data.confirmed);
+
+  if (!silent || !txConfirmationWatchState.initialized) {
+    txConfirmationWatchState = {
+      initialized: true,
+      confirmed,
+    };
+    return;
+  }
+
+  if (confirmed && !txConfirmationWatchState.confirmed) {
+    playConfirmedSound();
+  }
+
+  txConfirmationWatchState = {
+    initialized: true,
+    confirmed,
   };
 }
 
@@ -789,10 +856,294 @@ function startAutoRefresh() {
   autoRefreshInterval = setInterval(refreshAddressSilently, UPDATE_INTERVAL_MS);
 }
 
-async function lookupAddress() {
-  const generation = ++lookupGeneration;
+function calcTxOutputValue(tx) {
+  if (!tx?.vout) return 0;
+
+  return tx.vout.reduce(
+    (sum, vout) => sum + (Number(vout.value) || 0),
+    0,
+  );
+}
+
+function getTxVsize(tx) {
+  const vsize = Number(tx?.vsize);
+  if (Number.isFinite(vsize) && vsize > 0) return vsize;
+
+  const weight = Number(tx?.weight);
+  if (Number.isFinite(weight) && weight > 0) return Math.ceil(weight / 4);
+
+  const size = Number(tx?.size);
+  if (Number.isFinite(size) && size > 0) return size;
+
+  return null;
+}
+
+function getTxConfirmationCount(blockHeight) {
+  const height = Number(blockHeight);
+  const tip = Number(cachedBlockHeight);
+  if (!Number.isFinite(height) || !Number.isFinite(tip)) return null;
+  return Math.max(0, tip - height + 1);
+}
+
+function formatTxConfirmations(confirmed, blockHeight) {
+  if (!confirmed) return "0";
+  const count = getTxConfirmationCount(blockHeight);
+  if (count === null) return t("na");
+  return count.toLocaleString(getLocale());
+}
+
+function updateTxConfirmationsDisplay(data = lastAppliedTxData) {
+  if (!data || !txMetaConfirmationsEl) return;
+  txMetaConfirmationsEl.textContent = formatTxConfirmations(
+    data.confirmed,
+    data.blockHeight,
+  );
+}
+
+function formatTxFeeLine(feeSats, vsize) {
+  const fee = Number(feeSats);
+  const vbytes = Number(vsize);
+  if (!Number.isFinite(fee) || !Number.isFinite(vbytes) || vbytes <= 0) {
+    return t("na");
+  }
+
+  const rate = fee / vbytes;
+  return t("txFeeLine", {
+    rate: rate.toLocaleString(getLocale(), {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }),
+    vsize: vbytes.toLocaleString(getLocale()),
+    fee: fee.toLocaleString(getLocale()),
+  });
+}
+
+async function fetchTxFirstSeenFromBlockSummary(txid, blockHash) {
+  if (!blockHash) return null;
+
+  try {
+    const summary = await fetchJson(
+      `${API_BASE}/v1/block/${encodeURIComponent(blockHash)}/tx/${encodeURIComponent(txid)}/summary`,
+    );
+    const timestamp = Number(summary?.time);
+    return Number.isFinite(timestamp) && timestamp > 0 ? timestamp : null;
+  } catch (err) {
+    console.error(err);
+    return null;
+  }
+}
+
+async function fetchTxFirstSeen(txid, tx = null) {
+  try {
+    const times = await fetchJson(
+      `${TRANSACTION_TIMES_URL}?txId[]=${encodeURIComponent(txid)}`,
+    );
+    if (Array.isArray(times)) {
+      const timestamp = Number(times[0]);
+      if (Number.isFinite(timestamp) && timestamp > 0) {
+        return timestamp;
+      }
+    }
+  } catch (err) {
+    console.error(err);
+  }
+
+  if (tx?.status?.confirmed) {
+    return fetchTxFirstSeenFromBlockSummary(txid, tx.status.block_hash);
+  }
+
+  return null;
+}
+
+async function loadTransactionData(txid) {
+  const tx = await fetchJson(`${API_BASE}/tx/${encodeURIComponent(txid)}`);
+  const confirmed = Boolean(tx?.status?.confirmed);
+  const firstSeenTs = await fetchTxFirstSeen(txid, tx);
+
+  const outputSats = calcTxOutputValue(tx);
+  const embeddedData = detectEmbeddedData(tx);
+  const feeSats = Number(tx?.fee);
+  const vsize = getTxVsize(tx);
+
+  return {
+    tx,
+    txid,
+    confirmed,
+    outputBtc: satsToBtc(outputSats),
+    hasEmbeddedData: embeddedData.length > 0,
+    feeSats: Number.isFinite(feeSats) ? feeSats : null,
+    vsize,
+    blockTime: confirmed ? Number(tx.status.block_time) : null,
+    firstSeenTs,
+    firstSeenDate: firstSeenTs ? new Date(firstSeenTs * 1000) : null,
+    confirmedDate:
+      confirmed && tx.status.block_time
+        ? new Date(tx.status.block_time * 1000)
+        : null,
+    blockHeight:
+      confirmed && Number.isFinite(Number(tx.status.block_height))
+        ? Number(tx.status.block_height)
+        : null,
+  };
+}
+
+function setTxIdDisplay(fullTxid) {
+  txMetaIdEl.dataset.fullAddress = fullTxid;
+  txMetaIdEl.title = fullTxid;
+  txMetaIdEl.textContent = fullTxid;
+
+  requestAnimationFrame(() => {
+    const fullValue = txMetaIdEl.dataset.fullAddress;
+    if (!fullValue || !txResultEl.classList.contains("show")) return;
+
+    txMetaIdEl.textContent = fullValue;
+    if (txMetaIdEl.clientWidth === 0) return;
+
+    if (txMetaIdEl.scrollWidth <= txMetaIdEl.clientWidth) return;
+
+    for (let len = fullValue.length - 1; len >= 16; len -= 1) {
+      txMetaIdEl.textContent = truncateMiddle(fullValue, len);
+      if (txMetaIdEl.scrollWidth <= txMetaIdEl.clientWidth) return;
+    }
+
+    txMetaIdEl.textContent = truncateMiddle(fullValue, 16);
+  });
+}
+
+function formatTimeFromFirstSeenToConfirmed(firstSeenDate, confirmedDate) {
+  if (!firstSeenDate || !confirmedDate) return t("na");
+  return formatTimeSince(getTimeSinceParts(firstSeenDate, confirmedDate));
+}
+
+function startTxTimeSinceConfirmationTimer(fromDate) {
+  stopTxTimeSinceConfirmationTimer();
+  if (!fromDate) {
+    txMetaTimeSinceConfirmationEl.textContent = t("na");
+    return;
+  }
+
+  const tick = () => {
+    txMetaTimeSinceConfirmationEl.textContent = formatTimeSince(
+      getTimeSinceParts(fromDate),
+    );
+  };
+
+  tick();
+  txTimeSinceConfirmationInterval = setInterval(tick, 1000);
+}
+
+function fitTxValueBtcToWidth() {
+  if (!txValueBtcEl || !txResultEl.classList.contains("show")) return;
+
+  txValueBtcEl.style.fontSize = `${BALANCE_BTC_MAX_FONT_PX}px`;
+
+  if (txValueBtcEl.clientWidth === 0) return;
+
+  let fontSize = BALANCE_BTC_MAX_FONT_PX;
+  while (
+    fontSize > BALANCE_BTC_MIN_FONT_PX &&
+    txValueBtcEl.scrollWidth > txValueBtcEl.clientWidth
+  ) {
+    fontSize -= 1;
+    txValueBtcEl.style.fontSize = `${fontSize}px`;
+  }
+}
+
+function scheduleTxValueBtcFit() {
+  requestAnimationFrame(() => {
+    fitTxValueBtcToWidth();
+  });
+}
+
+function applyTransactionData(data, { silent = false } = {}) {
+  txValueBtcEl.textContent = `${formatBtc(data.outputBtc)} BTC`;
+  scheduleTxValueBtcFit();
+
+  txStatusSubEl.textContent = data.confirmed
+    ? t("txConfirmed")
+    : t("txUnconfirmed");
+  txStatusSubEl.className = data.confirmed
+    ? "balance-unconfirmed"
+    : "balance-unconfirmed tx-status-sub--unconfirmed";
+
+  setTxIdDisplay(data.txid);
+
+  txMetaDateEl.textContent = data.firstSeenDate
+    ? formatDateTime(data.firstSeenDate)
+    : t("na");
+  txMetaConfirmedAtEl.textContent =
+    data.confirmed && data.confirmedDate
+      ? formatDateTime(data.confirmedDate)
+      : t("na");
+  txMetaTimeToConfirmationEl.textContent = data.confirmed
+    ? formatTimeFromFirstSeenToConfirmed(
+        data.firstSeenDate,
+        data.confirmedDate,
+      )
+    : t("na");
+
+  if (data.confirmed && data.confirmedDate) {
+    startTxTimeSinceConfirmationTimer(data.confirmedDate);
+  } else {
+    stopTxTimeSinceConfirmationTimer();
+    txMetaTimeSinceConfirmationEl.textContent = t("na");
+  }
+
+  txMetaFeeEl.textContent = formatTxFeeLine(data.feeSats, data.vsize);
+  txEmbeddedDataEl.textContent = data.hasEmbeddedData ? t("yes") : t("no");
+  updateTxConfirmationsDisplay(data);
+
+  detectAndPlayTxConfirmationSound(data, { silent });
+
+  lastAppliedTxData = data;
+  currentTxLookup = data.txid;
+  resultEl.classList.remove("show");
+  txResultEl.classList.add("show");
+}
+
+async function refreshTransactionSilently() {
+  if (!currentTxLookup || refreshInFlight) return;
+
+  const targetTxid = currentTxLookup;
+  const generation = txLookupGeneration;
+  refreshInFlight = true;
+
+  try {
+    const data = await loadTransactionData(targetTxid);
+    if (generation !== txLookupGeneration || targetTxid !== currentTxLookup) {
+      return;
+    }
+
+    applyTransactionData(data, { silent: true });
+  } catch (err) {
+    console.error(err);
+  } finally {
+    refreshInFlight = false;
+  }
+}
+
+function startTxAutoRefresh() {
+  stopTxAutoRefresh();
+  txAutoRefreshInterval = setInterval(
+    refreshTransactionSilently,
+    UPDATE_INTERVAL_MS,
+  );
+}
+
+function resetTransactionLookupState() {
+  stopTxTimeSinceConfirmationTimer();
+  stopTxAutoRefresh();
+  resetTxConfirmationWatchState();
+  currentTxLookup = null;
+  lastAppliedTxData = null;
+}
+
+async function lookupTransaction() {
+  const generation = ++txLookupGeneration;
+  ++lookupGeneration;
 
   clearError();
+  resetTransactionLookupState();
   stopTimeSinceTimer();
   stopBalanceSubCycle();
   stopAutoRefresh();
@@ -803,11 +1154,62 @@ async function lookupAddress() {
   clearWatchedLookup();
   resetTxWatchState();
 
-  const address = addressInput.value.trim();
-  if (!address) {
+  const txid = addressInput.value.trim().toLowerCase();
+
+  lookupBtn.disabled = true;
+  lookupBtn.textContent = t("loading");
+
+  try {
+    const data = await loadTransactionData(txid);
+    if (generation !== txLookupGeneration) return;
+
+    applyTransactionData(data, { silent: false });
+    startTxAutoRefresh();
+  } catch (err) {
+    if (generation === txLookupGeneration) {
+      showError(t("errorTxFetch"));
+    }
+    console.error(err);
+  } finally {
+    if (generation === txLookupGeneration) {
+      lookupBtn.disabled = false;
+      lookupBtn.textContent = t("check");
+    }
+  }
+}
+
+function performLookup() {
+  const input = addressInput.value.trim();
+  if (!input) {
     showError(t("errorEmpty"));
     return;
   }
+
+  if (isValidTxid(input)) {
+    lookupTransaction();
+    return;
+  }
+
+  lookupAddress();
+}
+
+async function lookupAddress() {
+  const generation = ++lookupGeneration;
+  ++txLookupGeneration;
+
+  clearError();
+  stopTimeSinceTimer();
+  stopBalanceSubCycle();
+  stopAutoRefresh();
+  resetTransactionLookupState();
+  hideQrPanel();
+  currentLookupInput = null;
+  lastTxTimestamp = null;
+  lastAppliedData = null;
+  clearWatchedLookup();
+  resetTxWatchState();
+
+  const address = addressInput.value.trim();
 
   lookupBtn.disabled = true;
   lookupBtn.textContent = t("loading");
@@ -817,6 +1219,7 @@ async function lookupAddress() {
     if (generation !== lookupGeneration) return;
 
     applyAddressData(data, { silent: false });
+    txResultEl.classList.remove("show");
     setWatchedLookup(data.watchTarget);
     startAutoRefresh();
   } catch (err) {
@@ -1314,6 +1717,9 @@ async function fetchBlockHeight() {
 
     cachedBlockHeight = height;
     updateBlockHeightTooltip();
+    if (txResultEl.classList.contains("show")) {
+      updateTxConfirmationsDisplay();
+    }
   } catch (err) {
     console.error(err);
   }
@@ -1333,7 +1739,7 @@ loadCachedMarketMetrics();
 startBlockHeightRefresh();
 startMarketMetricsRefresh();
 
-lookupBtn.addEventListener("click", lookupAddress);
+lookupBtn.addEventListener("click", performLookup);
 qrBtn.addEventListener("click", showQrCode);
 qrOverlay.addEventListener("click", (event) => {
   if (event.target === qrOverlay) {
@@ -1341,12 +1747,17 @@ qrOverlay.addEventListener("click", (event) => {
   }
 });
 addressInput.addEventListener("keydown", (event) => {
-  if (event.key === "Enter") lookupAddress();
+  if (event.key === "Enter") performLookup();
 });
 
 window.addEventListener("resize", () => {
   fitMetaAddressToWidth();
   fitBalanceBtcToWidth();
+
+  if (currentTxLookup && txResultEl.classList.contains("show")) {
+    setTxIdDisplay(currentTxLookup);
+    fitTxValueBtcToWidth();
+  }
 });
 
 onLanguageChange(() => {
@@ -1360,6 +1771,10 @@ onLanguageChange(() => {
     }
 
     updateBlockHeightTooltip();
+
+    if (lastAppliedTxData && txResultEl.classList.contains("show")) {
+      applyTransactionData(lastAppliedTxData, { silent: true });
+    }
 
     if (lastAppliedData && resultEl.classList.contains("show")) {
       applyAddressData(lastAppliedData, { silent: true });

@@ -6,9 +6,23 @@ const translations = {
     pageTitle: "Bitcoin Explorer",
     pageHeading: "Bitcoin Explorer",
     pageSub:
-      "Real time check any bitcoin address or pubkey, including balance, transactions, and other important datas",
-    addressLabel: "Bitcoin address or public key",
-    addressPlaceholder: "e.g. bc1q..., 1A1zP1..., or public key hex",
+      "Real time check any bitcoin address, pubkey, or transaction, including balance, status, and other important data",
+    searchLabel: "Bitcoin address, public key, or transaction",
+    searchPlaceholder: "e.g. bc1q..., 1A1zP1..., public key hex, or txid",
+    txId: "Transaction ID:",
+    txDate: "First Seen Date:",
+    txStatus: "Status:",
+    txConfirmed: "Confirmed",
+    txUnconfirmed: "Unconfirmed",
+    txConfirmedAt: "Confirmed Date:",
+    txTimeToConfirmation: "Time to confirmation:",
+    txTimeSinceConfirmation: "Time since confirmation:",
+    txFee: "Fee:",
+    txFeeLine: "{rate} sat/vB × {vsize} vB = {fee} sats",
+    txEmbeddedData: "Embedded data:",
+    txConfirmations: "Confirmations:",
+    errorTxFetch:
+      "Could not fetch transaction. Check the txid and try again.",
     check: "Check",
     loading: "Loading...",
     qrShow: "Show address QR code",
@@ -44,7 +58,7 @@ const translations = {
     soundsOn: "Sounds on",
     soundsOff: "Sounds off",
     errorEmpty:
-      "Please enter a Bitcoin address or public key.",
+      "Please enter a Bitcoin address, public key, or transaction ID.",
     errorInvalidPubkey:
       "Invalid public key. Paste a compressed (02/03...) or uncompressed (04...) key in hex.",
     errorFetch:
@@ -77,9 +91,23 @@ const translations = {
     pageTitle: "Explorador Bitcoin",
     pageHeading: "Explorador Bitcoin",
     pageSub:
-      "Verificação em tempo real de qualquer endereço bitcoin ou chave pública, incluindo saldo, transações e outros dados importantes",
-    addressLabel: "Endereço bitcoin ou chave pública",
-    addressPlaceholder: "ex.: bc1q..., 1A1zP1..., ou chave pública em hex",
+      "Verificação em tempo real de qualquer endereço bitcoin, chave pública ou transação, incluindo saldo, status e outros dados importantes",
+    searchLabel: "Endereço bitcoin, chave pública ou transação",
+    searchPlaceholder: "ex.: bc1q..., 1A1zP1..., chave pública em hex ou txid",
+    txId: "ID da Transação:",
+    txDate: "Data da primeira detecção:",
+    txStatus: "Status:",
+    txConfirmed: "Confirmada",
+    txUnconfirmed: "Não confirmada",
+    txConfirmedAt: "Data de confirmação:",
+    txTimeToConfirmation: "Tempo até confirmação:",
+    txTimeSinceConfirmation: "Tempo desde confirmação:",
+    txFee: "Taxa:",
+    txFeeLine: "{rate} sat/vB × {vsize} vB = {fee} sats",
+    txEmbeddedData: "Dados embutidos:",
+    txConfirmations: "Confirmações:",
+    errorTxFetch:
+      "Não foi possível buscar a transação. Verifique o txid e tente novamente.",
     check: "Verificar",
     loading: "Carregando...",
     qrShow: "Mostrar QR code do endereço",
@@ -115,7 +143,7 @@ const translations = {
     soundsOn: "Sons ligados",
     soundsOff: "Sons desligados",
     errorEmpty:
-      "Por favor, insira um endereço bitcoin ou chave pública.",
+      "Por favor, insira um endereço bitcoin, chave pública ou ID de transação.",
     errorInvalidPubkey:
       "Chave pública inválida. Cole uma chave comprimida (02/03...) ou não comprimida (04...) em hexadecimal.",
     errorFetch:

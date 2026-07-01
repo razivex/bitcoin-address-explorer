@@ -918,14 +918,14 @@ function formatTxFeeLine(feeSats, vsize) {
   });
 }
 
-async function fetchTxFirstSeenFromBlockSummary(txid, blockHash) {
+async function fetchTxFirstSeenFromBlockAudit(txid, blockHash) {
   if (!blockHash) return null;
 
   try {
-    const summary = await fetchJson(
-      `${API_BASE}/v1/block/${encodeURIComponent(blockHash)}/tx/${encodeURIComponent(txid)}/summary`,
+    const audit = await fetchJson(
+      `${API_BASE}/v1/block/${encodeURIComponent(blockHash)}/tx/${encodeURIComponent(txid)}/audit`,
     );
-    const timestamp = Number(summary?.time);
+    const timestamp = Number(audit?.firstSeen);
     return Number.isFinite(timestamp) && timestamp > 0 ? timestamp : null;
   } catch (err) {
     console.error(err);
@@ -949,7 +949,7 @@ async function fetchTxFirstSeen(txid, tx = null) {
   }
 
   if (tx?.status?.confirmed) {
-    return fetchTxFirstSeenFromBlockSummary(txid, tx.status.block_hash);
+    return fetchTxFirstSeenFromBlockAudit(txid, tx.status.block_hash);
   }
 
   return null;

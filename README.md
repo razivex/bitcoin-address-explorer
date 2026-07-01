@@ -118,7 +118,7 @@ When a txid is detected, the result panel shows:
 | **Time to confirmation** | Elapsed time from first seen to confirmation (`N/A` while pending) |
 | **Time since confirmation** | Live counter from confirmation time (`N/A` while pending) |
 
-First-seen time for confirmed transactions comes from mempool.space `GET /api/v1/transaction-times` while still in the mempool, with a fallback to `GET /api/v1/block/{hash}/tx/{txid}/summary` after confirmation.
+First-seen time comes from mempool.space `GET /api/v1/transaction-times` while the transaction is still in (or recently left) the mempool. For older confirmed transactions where that endpoint returns `0`, the app falls back to `GET /api/v1/block/{hash}/tx/{txid}/audit` and reads the `firstSeen` field.
 
 Transaction data refreshes every **10 seconds**. A mechanical click sound plays when a watched transaction moves from unconfirmed to confirmed (respects the mute toggle).
 
@@ -162,7 +162,7 @@ When the user clicks **Check**, `app.js` classifies the input and routes to the 
 **Transaction ID**
 
 1. **Detect txid** — `tx-utils.js` matches 64-character hex strings.
-2. **Fetch transaction** — mempool.space `GET /api/tx/{txid}` plus first-seen time from `GET /api/v1/transaction-times` (with block-summary fallback for confirmed txs).
+2. **Fetch transaction** — mempool.space `GET /api/tx/{txid}` plus first-seen time from `GET /api/v1/transaction-times` (with block-audit fallback for confirmed txs).
 3. **Analyze outputs** — fee rate, virtual size, embedded-data detection, and confirmation count vs chain tip.
 4. **Render the transaction panel** and start live timers (confirmation elapsed time, confirmation count).
 
